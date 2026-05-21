@@ -1,5 +1,9 @@
-const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'openai').toLowerCase();
+
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 const DEFAULT_SYSTEM_PROMPT = `
 Tu es Capi, un assistant expert en création d'itinéraires de voyage réalistes.
@@ -10,7 +14,7 @@ Le nombre de jours doit être strictement respecté.
 Le dernier jour doit avoir is_departure_day=true, hide_dinner=true et ne doit jamais contenir de dîner complet.
 `.trim();
 
-const tripJsonSchema = {
+const openAiTripJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: [
@@ -69,10 +73,7 @@ const tripJsonSchema = {
           description: { type: 'string' },
           hotel: { type: 'string' },
           restaurant: {
-            anyOf: [
-              { type: 'string' },
-              { type: 'null' },
-            ],
+            anyOf: [{ type: 'string' }, { type: 'null' }],
           },
           is_departure_day: { type: 'boolean' },
           hide_dinner: { type: 'boolean' },
@@ -153,6 +154,134 @@ const tripJsonSchema = {
   },
 };
 
+const geminiTripJsonSchema = {
+  type: 'object',
+  required: [
+    'summary',
+    'estimated_total_cost',
+    'currency',
+    'currency_symbol',
+    'tips',
+    'must_book',
+    'weather_alternative',
+    'itinerary',
+  ],
+  properties: {
+    summary: { type: 'string' },
+    estimated_total_cost: { type: 'string' },
+    currency: { type: 'string' },
+    currency_symbol: { type: 'string' },
+    tips: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    must_book: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    weather_alternative: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    itinerary: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        required: [
+          'day',
+          'city',
+          'lat',
+          'lng',
+          'title',
+          'description',
+          'hotel',
+          'restaurant',
+          'is_departure_day',
+          'hide_dinner',
+          'activities',
+          'transport_to_next',
+        ],
+        properties: {
+          day: { type: 'number' },
+          city: { type: 'string' },
+          lat: { type: 'number' },
+          lng: { type: 'number' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          hotel: { type: 'string' },
+          restaurant: { type: ['string', 'null'] },
+          is_departure_day: { type: 'boolean' },
+          hide_dinner: { type: 'boolean' },
+          activities: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: [
+                'time',
+                'name',
+                'description',
+                'type',
+                'estimated_cost',
+                'duration',
+                'tags',
+                'lat',
+                'lng',
+              ],
+              properties: {
+                time: { type: 'string' },
+                name: { type: 'string' },
+                description: { type: 'string' },
+                type: {
+                  type: 'string',
+                  enum: [
+                    'visite',
+                    'repas',
+                    'transport',
+                    'detente',
+                    'nature',
+                    'photo',
+                    'shopping',
+                    'activite',
+                  ],
+                },
+                estimated_cost: { type: 'string' },
+                duration: { type: 'string' },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+                lat: { type: 'number' },
+                lng: { type: 'number' },
+              },
+            },
+          },
+          transport_to_next: {
+            type: ['object', 'null'],
+            required: ['destination_city', 'options'],
+            properties: {
+              destination_city: { type: 'string' },
+              options: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['mode', 'description', 'duration', 'estimated_cost'],
+                  properties: {
+                    mode: { type: 'string' },
+                    description: { type: 'string' },
+                    duration: { type: 'string' },
+                    estimated_cost: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 const readBody = async (req) => {
   if (req.body && typeof req.body === 'object') return req.body;
 
@@ -171,7 +300,7 @@ const readBody = async (req) => {
   return rawBody ? JSON.parse(rawBody) : {};
 };
 
-const extractOutputText = (openaiResponse) => {
+const extractOpenAiOutputText = (openaiResponse) => {
   if (openaiResponse.output_text) return openaiResponse.output_text;
 
   const output = openaiResponse.output || [];
@@ -191,6 +320,18 @@ const extractOutputText = (openaiResponse) => {
   return '';
 };
 
+const extractGeminiOutputText = (geminiResponse) => {
+  const parts = geminiResponse?.candidates?.[0]?.content?.parts || [];
+  const text = parts
+    .map((part) => part.text)
+    .filter(Boolean)
+    .join('');
+
+  if (text) return text;
+
+  return geminiResponse?.text || '';
+};
+
 const parseTripJson = (value) => {
   if (!value) {
     throw new Error('Réponse IA vide.');
@@ -208,12 +349,13 @@ const parseTripJson = (value) => {
   return JSON.parse(cleaned);
 };
 
-const sanitizeTrip = (trip) => {
+const sanitizeTrip = (trip, provider) => {
   const itinerary = Array.isArray(trip.itinerary) ? trip.itinerary : [];
 
   return {
     ...trip,
     generation_source: 'ai',
+    ai_provider: provider,
     generated_at: new Date().toISOString(),
     itinerary: itinerary.map((day, index) => ({
       ...day,
@@ -225,19 +367,134 @@ const sanitizeTrip = (trip) => {
   };
 };
 
+const callOpenAI = async ({ prompt, form, promptVersion, systemPrompt }) => {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('La variable d’environnement OPENAI_API_KEY est manquante côté serveur.');
+  }
+
+  const userContent =
+    prompt ||
+    `Génère un voyage Capi à partir de ce formulaire JSON : ${JSON.stringify(form)}`;
+
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      input: [
+        {
+          role: 'system',
+          content: systemPrompt || DEFAULT_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content: userContent,
+        },
+      ],
+      temperature: 0.4,
+      max_output_tokens: 12000,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'capi_trip',
+          strict: true,
+          schema: openAiTripJsonSchema,
+        },
+      },
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Erreur OpenAI.');
+  }
+
+  const outputText = extractOpenAiOutputText(data);
+
+  return {
+    trip: sanitizeTrip(parseTripJson(outputText), 'openai'),
+    source: 'openai',
+    model: OPENAI_MODEL,
+    promptVersion: promptVersion || null,
+    usage: data.usage || null,
+  };
+};
+
+const callGemini = async ({ prompt, form, promptVersion, systemPrompt }) => {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('La variable d’environnement GEMINI_API_KEY est manquante côté serveur.');
+  }
+
+  const userContent =
+    prompt ||
+    `Génère un voyage Capi à partir de ce formulaire JSON : ${JSON.stringify(form)}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': process.env.GEMINI_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [
+          {
+            text: systemPrompt || DEFAULT_SYSTEM_PROMPT,
+          },
+        ],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: userContent,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.4,
+        maxOutputTokens: 12000,
+        responseFormat: {
+          text: {
+            mimeType: 'application/json',
+            schema: geminiTripJsonSchema,
+          },
+        },
+      },
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Erreur Gemini.');
+  }
+
+  const outputText = extractGeminiOutputText(data);
+
+  return {
+    trip: sanitizeTrip(parseTripJson(outputText), 'gemini'),
+    source: 'gemini',
+    model: GEMINI_MODEL,
+    promptVersion: promptVersion || null,
+    usage: data.usageMetadata || null,
+  };
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({
       error: 'method_not_allowed',
       message: 'Seule la méthode POST est autorisée.',
-    });
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).json({
-      error: 'missing_openai_api_key',
-      message: 'La variable d’environnement OPENAI_API_KEY est manquante côté serveur.',
     });
   }
 
@@ -257,66 +514,20 @@ export default async function handler(req, res) {
       });
     }
 
-    const userContent =
-      prompt ||
-      `Génère un voyage Capi à partir de ce formulaire JSON : ${JSON.stringify(form)}`;
+    const provider = AI_PROVIDER === 'gemini' ? 'gemini' : 'openai';
 
-    const openaiResponse = await fetch(OPENAI_RESPONSES_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        input: [
-          {
-            role: 'system',
-            content: systemPrompt || DEFAULT_SYSTEM_PROMPT,
-          },
-          {
-            role: 'user',
-            content: userContent,
-          },
-        ],
-        temperature: 0.4,
-        max_output_tokens: 12000,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'capi_trip',
-            strict: true,
-            schema: tripJsonSchema,
-          },
-        },
-      }),
-    });
+    const result =
+      provider === 'gemini'
+        ? await callGemini({ prompt, form, promptVersion, systemPrompt })
+        : await callOpenAI({ prompt, form, promptVersion, systemPrompt });
 
-    const data = await openaiResponse.json();
-
-    if (!openaiResponse.ok) {
-      return res.status(openaiResponse.status).json({
-        error: 'openai_error',
-        message: data?.error?.message || 'Erreur OpenAI.',
-        details: data?.error || data,
-      });
-    }
-
-    const outputText = extractOutputText(data);
-    const trip = sanitizeTrip(parseTripJson(outputText));
-
-    return res.status(200).json({
-      trip,
-      source: 'openai',
-      model: DEFAULT_MODEL,
-      promptVersion: promptVersion || null,
-      usage: data.usage || null,
-    });
+    return res.status(200).json(result);
   } catch (error) {
     console.error('[api/generate-trip]', error);
 
     return res.status(500).json({
       error: 'generate_trip_failed',
+      provider: AI_PROVIDER,
       message: error?.message || 'Impossible de générer le voyage.',
     });
   }
