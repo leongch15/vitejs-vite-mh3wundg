@@ -18,10 +18,11 @@ import {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const generateTrip = async ({ prompt }) => {
+const generateTrip = async ({ prompt, form }) => {
   if (APP_MODE === APP_MODES.AI) {
     return generateTripWithAI({
       prompt,
+      form,
       fallbackToLocal: true,
     });
   }
@@ -32,9 +33,9 @@ const generateTrip = async ({ prompt }) => {
 export const base44 = {
   integrations: {
     Core: {
-      InvokeLLM: async ({ prompt }) => {
+      InvokeLLM: async ({ prompt, form }) => {
         await sleep(DEMO_SETTINGS.simulatedGenerationDelayMs);
-        return generateTrip({ prompt });
+        return generateTrip({ prompt, form });
       },
     },
   },

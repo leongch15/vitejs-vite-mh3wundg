@@ -555,6 +555,410 @@ const sanitizeTrip = (trip, provider) => {
   };
 };
 
+
+const DAY_MS = 1000 * 60 * 60 * 24;
+
+const parseDate = (dateString) => {
+  if (!dateString) return null;
+
+  const [year, month, day] = String(dateString).split('-').map(Number);
+
+  if (!year || !month || !day) return null;
+
+  return new Date(year, month - 1, day);
+};
+
+const getExpectedDaysCount = ({ form, prompt, trip }) => {
+  if (form?.days_count || form?.daysCount) {
+    const days = Number(form.days_count || form.daysCount);
+    if (Number.isFinite(days) && days > 0) return days;
+  }
+
+  const start = parseDate(form?.start_date);
+  const end = parseDate(form?.end_date);
+
+  if (start && end) {
+    const diff = Math.floor((end - start) / DAY_MS) + 1;
+    if (diff > 0 && diff < 90) return diff;
+  }
+
+  const promptDays =
+    String(prompt || '').match(/Durée\s*:\s*(\d+)\s*jours/i)?.[1] ||
+    String(prompt || '').match(/Nombre exact de jours\s*:\s*(\d+)/i)?.[1];
+
+  if (promptDays) {
+    const days = Number(promptDays);
+    if (Number.isFinite(days) && days > 0) return days;
+  }
+
+  if (Array.isArray(trip?.itinerary) && trip.itinerary.length > 0) {
+    return trip.itinerary.length;
+  }
+
+  return null;
+};
+
+const getDepartureTime = ({ form, prompt }) => {
+  return (
+    form?.departure_time ||
+    form?.departureTime ||
+    String(prompt || '').match(/Heure de départ\s*:\s*([^\n]+)/i)?.[1]?.trim() ||
+    String(prompt || '').match(/Heure de retour\s*:\s*([^\n]+)/i)?.[1]?.trim() ||
+    ''
+  );
+};
+
+const getHourFromTime = (time) => {
+  const match = String(time || '').match(/(\d{1,2})/);
+  if (!match) return null;
+
+  const hour = Number(match[1]);
+  return Number.isFinite(hour) ? hour : null;
+};
+
+const normalizeText = (value = '') =>
+  value
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '');
+
+const isDinnerLikeActivity = (activity) => {
+  const text = normalizeText(
+    `${activity?.time || ''} ${activity?.name || ''} ${activity?.type || ''} ${activity?.description || ''}`
+  );
+  const hour = getHourFromTime(activity?.time);
+
+  return (
+    text.includes('diner') ||
+    text.includes('restaurant du soir') ||
+    text.includes('soiree') ||
+    text.includes('soir') ||
+    (activity?.type === 'repas' && hour !== null && hour >= 18)
+  );
+};
+
+const uniqueStrings = (list = []) => {
+  const seen = new Set();
+
+  return toArray(list)
+    .map((item) => toStringValue(item).trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const key = normalizeText(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const getFallbackCoords = (trip, day) => {
+  const dayLat = toNumberValue(day?.lat, null);
+  const dayLng = toNumberValue(day?.lng, null);
+
+  if (dayLat !== null && dayLng !== null) {
+    return { lat: dayLat, lng: dayLng };
+  }
+
+  const firstActivity = (day?.activities || []).find(
+    (activity) =>
+      toNumberValue(activity?.lat, null) !== null &&
+      toNumberValue(activity?.lng, null) !== null
+  );
+
+  if (firstActivity) {
+    return {
+      lat: Number(firstActivity.lat),
+      lng: Number(firstActivity.lng),
+    };
+  }
+
+  const firstDay = (trip?.itinerary || []).find(
+    (item) => toNumberValue(item?.lat, null) !== null && toNumberValue(item?.lng, null) !== null
+  );
+
+  if (firstDay) {
+    return {
+      lat: Number(firstDay.lat),
+      lng: Number(firstDay.lng),
+    };
+  }
+
+  return {
+    lat: 48.8566,
+    lng: 2.3522,
+  };
+};
+
+const createFallbackActivity = ({ day, index, time, name, type = 'visite' }) => {
+  const coords = getFallbackCoords({ itinerary: [day] }, day);
+
+  return {
+    time,
+    name,
+    description: 'Ajout automatique pour garantir un itinéraire complet et exploitable.',
+    type,
+    estimated_cost: type === 'repas' ? '15€ - 30€' : '0€ - 20€',
+    duration: type === 'repas' ? '1h' : '1h30',
+    tags: ['auto-repair'],
+    lat: coords.lat + index * 0.002,
+    lng: coords.lng + index * 0.002,
+  };
+};
+
+const createFallbackDay = ({ trip, dayNumber }) => {
+  const previousDay = trip.itinerary?.[trip.itinerary.length - 1] || {};
+  const city = previousDay.city || trip.destination || 'Destination';
+  const coords = getFallbackCoords(trip, previousDay);
+
+  return {
+    day: dayNumber,
+    city,
+    lat: coords.lat,
+    lng: coords.lng,
+    title: `Journée à ${city}`,
+    description: 'Journée ajoutée automatiquement pour respecter le nombre exact de jours.',
+    hotel: previousDay.hotel || `Hébergement recommandé à ${city}`,
+    restaurant: `Dîner libre à ${city}`,
+    is_departure_day: false,
+    hide_dinner: false,
+    activities: [
+      createFallbackActivity({
+        day: { ...previousDay, lat: coords.lat, lng: coords.lng },
+        index: 0,
+        time: '09:30',
+        name: `Découverte de ${city}`,
+        type: 'visite',
+      }),
+      createFallbackActivity({
+        day: { ...previousDay, lat: coords.lat, lng: coords.lng },
+        index: 1,
+        time: '12:30',
+        name: 'Déjeuner libre',
+        type: 'repas',
+      }),
+      createFallbackActivity({
+        day: { ...previousDay, lat: coords.lat, lng: coords.lng },
+        index: 2,
+        time: '17:30',
+        name: 'Temps libre',
+        type: 'detente',
+      }),
+    ],
+    transport_to_next: null,
+  };
+};
+
+const ensureDayActivities = ({ trip, day, dayIndex, isLastDay, departureTime, warnings }) => {
+  let activities = toArray(day.activities)
+    .filter((activity) => activity && typeof activity === 'object')
+    .map((activity, activityIndex) => normalizeActivity(activity, activityIndex, day));
+
+  if (isLastDay) {
+    const departureHour = getHourFromTime(departureTime);
+
+    activities = activities.filter((activity) => {
+      if (isDinnerLikeActivity(activity)) return false;
+
+      const hour = getHourFromTime(activity.time);
+      if (departureHour !== null && hour !== null && hour > departureHour) return false;
+
+      return true;
+    });
+
+    const hasDeparture = activities.some((activity) =>
+      normalizeText(activity.name).includes('depart')
+    );
+
+    if (!hasDeparture) {
+      activities.push({
+        time: departureTime || '09:00',
+        name: 'Départ',
+        description: 'Trajet vers la gare ou l’aéroport.',
+        type: 'transport',
+        estimated_cost: 'Selon transport',
+        duration: 'Selon transport',
+        tags: ['departure'],
+        lat: day.lat,
+        lng: day.lng,
+      });
+      warnings.push(`Jour ${dayIndex + 1} : départ ajouté automatiquement.`);
+    }
+
+    return activities.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  }
+
+  if (activities.length === 0) {
+    activities = [
+      createFallbackActivity({
+        day,
+        index: 0,
+        time: '09:30',
+        name: `Découverte de ${day.city || 'la destination'}`,
+        type: 'visite',
+      }),
+      createFallbackActivity({
+        day,
+        index: 1,
+        time: '12:30',
+        name: 'Déjeuner libre',
+        type: 'repas',
+      }),
+    ];
+
+    warnings.push(`Jour ${dayIndex + 1} : activités ajoutées automatiquement.`);
+  }
+
+  const hasEvening =
+    activities.some(isDinnerLikeActivity) ||
+    activities.some((activity) => {
+      const hour = getHourFromTime(activity.time);
+      return hour !== null && hour >= 18;
+    });
+
+  if (!hasEvening) {
+    activities.push(
+      createFallbackActivity({
+        day,
+        index: activities.length,
+        time: '19:30',
+        name: 'Soirée libre',
+        type: 'detente',
+      })
+    );
+    warnings.push(`Jour ${dayIndex + 1} : soirée libre ajoutée automatiquement.`);
+  }
+
+  return activities.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+};
+
+const ensureTransports = ({ itinerary, warnings }) => {
+  return itinerary.map((day, index) => {
+    const nextDay = itinerary[index + 1];
+
+    if (!nextDay) {
+      return {
+        ...day,
+        transport_to_next: null,
+      };
+    }
+
+    if (!day.city || !nextDay.city || day.city === nextDay.city) {
+      if (day.transport_to_next) {
+        warnings.push(`Jour ${index + 1} : transport supprimé car la ville ne change pas.`);
+      }
+
+      return {
+        ...day,
+        transport_to_next: null,
+      };
+    }
+
+    if (day.transport_to_next?.options?.length) {
+      return day;
+    }
+
+    warnings.push(`Jour ${index + 1} : transport inter-ville ajouté automatiquement.`);
+
+    return {
+      ...day,
+      transport_to_next: {
+        destination_city: nextDay.city,
+        options: [
+          {
+            mode: 'train',
+            description: `Trajet recommandé de ${day.city} à ${nextDay.city}.`,
+            duration: 'Durée à vérifier',
+            estimated_cost: 'Selon transport',
+          },
+        ],
+      },
+    };
+  });
+};
+
+const validatePostAITrip = ({ trip, form, prompt, provider }) => {
+  const warnings = [];
+  const expectedDays = getExpectedDaysCount({ form, prompt, trip });
+  const departureTime = getDepartureTime({ form, prompt });
+
+  if (!Array.isArray(trip.itinerary) || trip.itinerary.length === 0) {
+    throw new Error('Réponse IA trop incomplète : itinerary absent ou vide.');
+  }
+
+  if (expectedDays && Math.abs(trip.itinerary.length - expectedDays) > Math.max(2, expectedDays / 2)) {
+    throw new Error(
+      `Réponse IA trop incohérente : ${trip.itinerary.length} jour(s) reçus pour ${expectedDays} attendu(s).`
+    );
+  }
+
+  let itinerary = [...trip.itinerary];
+
+  if (expectedDays && itinerary.length > expectedDays) {
+    warnings.push(`Itinéraire tronqué : ${itinerary.length}/${expectedDays} jours.`);
+    itinerary = itinerary.slice(0, expectedDays);
+  }
+
+  while (expectedDays && itinerary.length < expectedDays) {
+    warnings.push(`Jour ${itinerary.length + 1} ajouté pour respecter la durée.`);
+    itinerary.push(createFallbackDay({ trip: { ...trip, itinerary }, dayNumber: itinerary.length + 1 }));
+  }
+
+  itinerary = itinerary.map((day, index) => {
+    const isLastDay = index === itinerary.length - 1;
+    const coords = getFallbackCoords(trip, day);
+
+    const normalizedDay = {
+      ...day,
+      day: index + 1,
+      city: toStringValue(day.city, form?.destination || trip.destination || 'Destination'),
+      lat: toNumberValue(day.lat, coords.lat),
+      lng: toNumberValue(day.lng, coords.lng),
+      title: toStringValue(day.title, `Jour ${index + 1}`),
+      description: toStringValue(day.description, 'Journée générée par Capi.'),
+      hotel: toStringValue(day.hotel, ''),
+      is_departure_day: isLastDay ? true : Boolean(day.is_departure_day),
+      hide_dinner: isLastDay ? true : Boolean(day.hide_dinner),
+    };
+
+    normalizedDay.restaurant =
+      normalizedDay.hide_dinner || normalizedDay.is_departure_day
+        ? null
+        : toStringValue(day.restaurant, '');
+
+    normalizedDay.activities = ensureDayActivities({
+      trip,
+      day: normalizedDay,
+      dayIndex: index,
+      isLastDay,
+      departureTime,
+      warnings,
+    });
+
+    return normalizedDay;
+  });
+
+  itinerary = ensureTransports({ itinerary, warnings });
+
+  const repairedTrip = {
+    ...trip,
+    destination: trip.destination || form?.destination,
+    tips: uniqueStrings(trip.tips),
+    must_book: uniqueStrings(trip.must_book),
+    weather_alternative: uniqueStrings(trip.weather_alternative),
+    itinerary,
+    generation_source: 'ai',
+    ai_provider: provider,
+    post_ai_validation: {
+      status: warnings.length > 0 ? 'repaired' : 'valid',
+      warnings,
+      checked_at: new Date().toISOString(),
+    },
+  };
+
+  return repairedTrip;
+};
+
 const callOpenAI = async ({ prompt, form, promptVersion, systemPrompt }) => {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('La variable d’environnement OPENAI_API_KEY est manquante côté serveur.');
@@ -604,7 +1008,12 @@ const callOpenAI = async ({ prompt, form, promptVersion, systemPrompt }) => {
   const outputText = extractOpenAiOutputText(data);
 
   return {
-    trip: sanitizeTrip(parseTripJson(outputText), 'openai'),
+    trip: validatePostAITrip({
+      trip: sanitizeTrip(parseTripJson(outputText), 'openai'),
+      form,
+      prompt,
+      provider: 'openai',
+    }),
     source: 'openai',
     model: OPENAI_MODEL,
     promptVersion: promptVersion || null,
@@ -664,7 +1073,12 @@ const callGemini = async ({ prompt, form, promptVersion, systemPrompt }) => {
   const outputText = extractGeminiOutputText(data);
 
   return {
-    trip: sanitizeTrip(parseTripJson(outputText), 'gemini'),
+    trip: validatePostAITrip({
+      trip: sanitizeTrip(parseTripJson(outputText), 'gemini'),
+      form,
+      prompt,
+      provider: 'gemini',
+    }),
     source: 'gemini',
     model: GEMINI_MODEL,
     promptVersion: promptVersion || null,

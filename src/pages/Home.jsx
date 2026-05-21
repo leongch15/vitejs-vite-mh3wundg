@@ -125,6 +125,7 @@ Réponds uniquement en français. Sois précis, concret et vraiment utile.`;
 
       const result = await base44.integrations.Core.InvokeLLM({
         prompt,
+        form: formData,
         response_json_schema: {
           type: 'object',
           properties: {
