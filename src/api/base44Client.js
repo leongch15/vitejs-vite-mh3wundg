@@ -1,6 +1,5 @@
 import {
-  APP_MODES,
-  APP_MODE,
+  IS_AI_MODE,
   DEMO_SETTINGS,
 } from '@/config/appConfig';
 
@@ -19,7 +18,7 @@ import {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const generateTrip = async ({ prompt, form }) => {
-  if (APP_MODE === APP_MODES.AI) {
+  if (IS_AI_MODE) {
     return generateTripWithAI({
       prompt,
       form,

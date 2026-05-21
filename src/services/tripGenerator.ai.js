@@ -10,7 +10,6 @@ import {
 import {
   generateLocalTrip,
   generateLocalTripFromPrompt,
-  parsePrompt,
 } from '@/services/tripGenerator.local';
 
 const parseJsonSafely = (value) => {
@@ -127,8 +126,11 @@ export const generateTripWithAI = async ({
     return {
       ...fallbackTrip,
       generation_source: 'local_fallback',
+      ai_provider: 'local',
       prompt_version: TRIP_PROMPT_VERSION,
       ai_error: error?.message || 'Erreur IA inconnue',
+      fallback_used: true,
+      fallback_at: new Date().toISOString(),
     };
   }
 };

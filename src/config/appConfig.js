@@ -3,7 +3,31 @@ export const APP_MODES = {
   AI: 'ai',
 };
 
-export const APP_MODE = APP_MODES.AI;
+const readClientEnv = (key, fallback = '') => {
+  try {
+    return import.meta.env?.[key] || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const normalizeAppMode = (value) => {
+  const mode = String(value || '').toLowerCase();
+
+  if (mode === APP_MODES.AI) return APP_MODES.AI;
+  if (mode === APP_MODES.LOCAL) return APP_MODES.LOCAL;
+
+  return APP_MODES.LOCAL;
+};
+
+// VITE_APP_MODE est volontairement public : il ne contient aucune clé API.
+// En local / Bolt, si la variable n'existe pas, l'app reste en mode local.
+// Sur Vercel, mets VITE_APP_MODE=ai pour activer l'IA.
+export const APP_MODE = normalizeAppMode(
+  readClientEnv('VITE_APP_MODE', APP_MODES.LOCAL)
+);
+
+export const IS_AI_MODE = APP_MODE === APP_MODES.AI;
 
 export const ROUTES = {
   HOME: '/',
@@ -154,10 +178,12 @@ export const AI_SETTINGS = {
   tripGenerationEndpoint: '/api/generate-trip',
   timeoutMs: 45000,
   fallbackToLocal: true,
+  showFallbackMetadata: true,
 };
 
 export const APP_CONFIG = {
   mode: APP_MODE,
+  isAiMode: IS_AI_MODE,
   modes: APP_MODES,
   routes: ROUTES,
   tripStatuses: TRIP_STATUSES,
