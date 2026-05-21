@@ -462,12 +462,7 @@ const callGemini = async ({ prompt, form, promptVersion, systemPrompt }) => {
       generationConfig: {
         temperature: 0.4,
         maxOutputTokens: 12000,
-        responseFormat: {
-          text: {
-            mimeType: 'application/json',
-            schema: geminiTripJsonSchema,
-          },
-        },
+        responseMimeType: 'application/json',
       },
     }),
   });
