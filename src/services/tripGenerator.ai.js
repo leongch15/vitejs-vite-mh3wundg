@@ -47,11 +47,21 @@ const callServerlessTripEndpoint = async ({ prompt, form, signal }) => {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Erreur endpoint IA : ${response.status}`);
-  }
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json')
+    ? await response.json()
+    : await response.text();
 
-  const data = await response.json();
+  if (!response.ok) {
+    const serverMessage =
+      typeof data === 'object'
+        ? data.message || data.error || JSON.stringify(data)
+        : data;
+
+    throw new Error(
+      `Erreur endpoint IA : ${response.status} — ${serverMessage || 'Erreur serveur inconnue'}`
+    );
+  }
 
   return parseJsonSafely(data.trip || data.result || data.content || data);
 };
