@@ -332,38 +332,226 @@ const extractGeminiOutputText = (geminiResponse) => {
   return geminiResponse?.text || '';
 };
 
-const parseTripJson = (value) => {
-  if (!value) {
-    throw new Error('Réponse IA vide.');
-  }
+const ALLOWED_ACTIVITY_TYPES = new Set([
+  'visite',
+  'repas',
+  'transport',
+  'detente',
+  'nature',
+  'photo',
+  'shopping',
+  'activite',
+]);
 
-  if (typeof value === 'object') return value;
+const toArray = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value) return [];
+  return [value];
+};
 
-  const cleaned = String(value)
+const toStringValue = (value, fallback = '') => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') return value;
+  return String(value);
+};
+
+const toNumberValue = (value, fallback = null) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const removeCodeFences = (value) => {
+  return String(value)
     .trim()
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/```$/i, '')
     .trim();
+};
 
-  return JSON.parse(cleaned);
+const removeTrailingCommas = (value) => {
+  return value.replace(/,\s*([}\]])/g, '$1');
+};
+
+const extractJsonObjectCandidate = (value) => {
+  const cleaned = removeCodeFences(value);
+
+  if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+    return cleaned;
+  }
+
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    return cleaned;
+  }
+
+  return cleaned.slice(firstBrace, lastBrace + 1);
+};
+
+const parseTripJson = (value) => {
+  if (!value) {
+    throw new Error('Réponse IA vide.');
+  }
+
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) {
+      throw new Error('Réponse IA invalide : le JSON racine doit être un objet, pas un tableau.');
+    }
+
+    return value;
+  }
+
+  const candidate = extractJsonObjectCandidate(value);
+
+  const attempts = [
+    candidate,
+    removeTrailingCommas(candidate),
+  ];
+
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt);
+
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Le JSON racine doit être un objet.');
+      }
+
+      return parsed;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const preview = candidate.slice(0, 400).replace(/\s+/g, ' ');
+
+  throw new Error(
+    `JSON IA non parsable : ${lastError?.message || 'erreur inconnue'}. Aperçu : ${preview}`
+  );
+};
+
+const assertTripShape = (trip) => {
+  if (!trip || typeof trip !== 'object' || Array.isArray(trip)) {
+    throw new Error('Réponse IA invalide : le voyage doit être un objet JSON.');
+  }
+
+  if (!Array.isArray(trip.itinerary)) {
+    throw new Error('Réponse IA invalide : itinerary doit être un tableau.');
+  }
+
+  if (trip.itinerary.length === 0) {
+    throw new Error('Réponse IA invalide : itinerary est vide.');
+  }
+
+  const brokenDayIndex = trip.itinerary.findIndex(
+    (day) => !day || typeof day !== 'object' || Array.isArray(day)
+  );
+
+  if (brokenDayIndex !== -1) {
+    throw new Error(`Réponse IA invalide : le jour ${brokenDayIndex + 1} n’est pas un objet.`);
+  }
+
+  return true;
+};
+
+const normalizeActivity = (activity, activityIndex, day) => {
+  const dayLat = toNumberValue(day.lat, 48.8566);
+  const dayLng = toNumberValue(day.lng, 2.3522);
+  const type = toStringValue(activity?.type, 'visite');
+
+  return {
+    time: toStringValue(activity?.time, activityIndex === 0 ? '09:30' : '10:00'),
+    name: toStringValue(activity?.name, `Activité ${activityIndex + 1}`),
+    description: toStringValue(activity?.description, 'Activité proposée par Capi.'),
+    type: ALLOWED_ACTIVITY_TYPES.has(type) ? type : 'visite',
+    estimated_cost: toStringValue(
+      activity?.estimated_cost || activity?.estimatedCost,
+      '0€'
+    ),
+    duration: toStringValue(activity?.duration, '1h'),
+    tags: toArray(activity?.tags).map((tag) => toStringValue(tag)).filter(Boolean),
+    lat: toNumberValue(activity?.lat, dayLat + activityIndex * 0.002),
+    lng: toNumberValue(activity?.lng, dayLng + activityIndex * 0.002),
+  };
+};
+
+const normalizeTransport = (transport) => {
+  if (!transport || typeof transport !== 'object' || Array.isArray(transport)) {
+    return null;
+  }
+
+  const options = toArray(transport.options)
+    .filter((option) => option && typeof option === 'object')
+    .map((option) => ({
+      mode: toStringValue(option.mode, 'train'),
+      description: toStringValue(option.description, 'Trajet recommandé entre deux étapes.'),
+      duration: toStringValue(option.duration, 'Durée à vérifier'),
+      estimated_cost: toStringValue(option.estimated_cost || option.estimatedCost, 'Selon transport'),
+    }));
+
+  if (!transport.destination_city && options.length === 0) {
+    return null;
+  }
+
+  return {
+    destination_city: toStringValue(transport.destination_city, ''),
+    options,
+  };
 };
 
 const sanitizeTrip = (trip, provider) => {
-  const itinerary = Array.isArray(trip.itinerary) ? trip.itinerary : [];
+  assertTripShape(trip);
+
+  const itinerary = trip.itinerary.map((day, index) => {
+    const isLastDay = index === trip.itinerary.length - 1;
+    const isDepartureDay = Boolean(day.is_departure_day) || isLastDay;
+    const hideDinner = Boolean(day.hide_dinner) || isDepartureDay;
+
+    const normalizedDay = {
+      ...day,
+      day: toNumberValue(day.day, index + 1),
+      city: toStringValue(day.city, 'Ville à préciser'),
+      lat: toNumberValue(day.lat, 48.8566),
+      lng: toNumberValue(day.lng, 2.3522),
+      title: toStringValue(day.title, `Jour ${index + 1}`),
+      description: toStringValue(day.description, 'Journée générée par Capi.'),
+      hotel: toStringValue(day.hotel, ''),
+      restaurant: hideDinner ? null : toStringValue(day.restaurant, ''),
+      is_departure_day: isDepartureDay,
+      hide_dinner: hideDinner,
+      transport_to_next: normalizeTransport(day.transport_to_next),
+    };
+
+    const activities = toArray(day.activities)
+      .filter((activity) => activity && typeof activity === 'object')
+      .map((activity, activityIndex) =>
+        normalizeActivity(activity, activityIndex, normalizedDay)
+      );
+
+    return {
+      ...normalizedDay,
+      activities,
+    };
+  });
 
   return {
     ...trip,
+    summary: toStringValue(trip.summary, 'Voyage généré par Capi.'),
+    estimated_total_cost: toStringValue(trip.estimated_total_cost, 'Budget à vérifier'),
+    currency: toStringValue(trip.currency, 'EUR'),
+    currency_symbol: toStringValue(trip.currency_symbol, '€'),
+    tips: toArray(trip.tips).map((item) => toStringValue(item)).filter(Boolean),
+    must_book: toArray(trip.must_book).map((item) => toStringValue(item)).filter(Boolean),
+    weather_alternative: toArray(trip.weather_alternative)
+      .map((item) => toStringValue(item))
+      .filter(Boolean),
     generation_source: 'ai',
     ai_provider: provider,
     generated_at: new Date().toISOString(),
-    itinerary: itinerary.map((day, index) => ({
-      ...day,
-      day: Number(day.day || index + 1),
-      restaurant: day.hide_dinner || day.is_departure_day ? null : day.restaurant,
-      transport_to_next: day.transport_to_next || null,
-      activities: Array.isArray(day.activities) ? day.activities : [],
-    })),
+    itinerary,
   };
 };
 
