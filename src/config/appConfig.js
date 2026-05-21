@@ -3,7 +3,7 @@ export const APP_MODES = {
   AI: 'ai',
 };
 
-export const APP_MODE = APP_MODES.LOCAL;
+export const APP_MODE = APP_MODES.AI;
 
 export const ROUTES = {
   HOME: '/',
