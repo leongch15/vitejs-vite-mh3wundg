@@ -76,25 +76,57 @@ const withTimeout = async (promiseFactory, timeoutMs) => {
   }
 };
 
+const getDaysCountFromForm = (form = {}) => {
+  if (form.days_count || form.daysCount) {
+    return Number(form.days_count || form.daysCount);
+  }
+
+  if (form.start_date && form.end_date) {
+    const start = new Date(form.start_date);
+    const end = new Date(form.end_date);
+    const diff = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+
+    if (Number.isFinite(diff) && diff > 0) return diff;
+  }
+
+  return 3;
+};
+
 const generateFallbackTrip = ({ prompt, form }) => {
+  // Important : depuis le prompt V2, le texte du prompt n’est plus garanti
+  // compatible avec l’ancien parseur local. On privilégie donc formData,
+  // qui contient les vraies valeurs du formulaire.
+  if (form?.destination) {
+    const params = { ...form };
+
+    return generateLocalTrip({
+      destination: params.destination || 'Paris',
+      daysCount: getDaysCountFromForm(params),
+      budget: params.budget || 'modere',
+      travelers: params.travelers || 2,
+      style: params.travel_style || params.style || 'essentiels',
+      interests: params.interests || [],
+      arrivalCity: params.arrival_city || params.arrivalCity,
+      returnCity: params.return_city || params.returnCity,
+      walkingLevel: params.walking_level || params.walkingLevel || 'moyen',
+      arrivalTime: params.arrival_time || params.arrivalTime,
+      departureTime: params.departure_time || params.departureTime,
+      avoidItems: params.avoid_items || params.avoidItems,
+    });
+  }
+
   if (prompt) {
     return generateLocalTripFromPrompt(prompt);
   }
 
-  const params = form ? { ...form } : {};
   return generateLocalTrip({
-    destination: params.destination || 'Paris',
-    daysCount: params.days_count || params.daysCount || 3,
-    budget: params.budget || 'modere',
-    travelers: params.travelers || 2,
-    style: params.travel_style || params.style || 'essentiels',
-    interests: params.interests || [],
-    arrivalCity: params.arrival_city || params.arrivalCity,
-    returnCity: params.return_city || params.returnCity,
-    walkingLevel: params.walking_level || params.walkingLevel || 'moyen',
-    arrivalTime: params.arrival_time || params.arrivalTime,
-    departureTime: params.departure_time || params.departureTime,
-    avoidItems: params.avoid_items || params.avoidItems,
+    destination: 'Paris',
+    daysCount: 3,
+    budget: 'modere',
+    travelers: 2,
+    style: 'essentiels',
+    interests: [],
+    walkingLevel: 'moyen',
   });
 };
 
