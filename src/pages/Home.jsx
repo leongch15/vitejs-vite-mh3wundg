@@ -74,12 +74,12 @@ export default function Home() {
         .filter(Boolean)
         .join('; ');
 
-      const prompt = `Tu es un expert en voyages premium. Génère un itinéraire complet, détaillé et VRAIMENT PERSONNALISÉ pour un voyage à ${formData.destination}.
+      const prompt = `Tu es Capi, un planificateur de voyage expert. Génère un itinéraire complet, détaillé, réaliste et VRAIMENT PRÊT À SUIVRE pour ${formData.destination}.
 
 PARAMÈTRES DU VOYAGE :
 - Destination : ${formData.destination}
-- Durée : ${daysCount} jours (du ${formData.start_date} au ${formData.end_date})
-- Budget : ${formData.budget} (économique = moins cher, modéré = prix raisonnables, confort = bien, luxe = haut de gamme)
+- Durée exacte : ${daysCount} jours (du ${formData.start_date} au ${formData.end_date})
+- Budget : ${formData.budget}
 - Voyageurs : ${formData.travelers} personne(s)
 - Style de voyage : ${formData.travel_style}
 - Centres d'intérêt : ${interestsList || 'général'}
@@ -97,31 +97,59 @@ ${styleInstruction}
 CENTRES D'INTÉRÊT À INTÉGRER CONCRÈTEMENT :
 ${interestsList ? `Intègre impérativement ces éléments dans les activités : ${interestsList}` : 'Proposer un équilibre général.'}
 
-DEVISE LOCALE :
-Tous les prix dans la devise officielle du pays (¥ Japon, € France, $ USA, £ UK, etc.). Fournis le code devise (ex: JPY) et le symbole.
+MISSION PRINCIPALE :
+Ne génère pas une simple liste d’activités. Construis une vraie stratégie de voyage :
+- où dormir chaque nuit ;
+- quand rester plusieurs nuits dans une ville ;
+- quand changer de ville ;
+- pourquoi changer ou ne pas changer ;
+- comment éviter de refaire la valise trop souvent ;
+- quel transport utiliser entre les villes ;
+- quel transport utiliser dans les grandes journées ;
+- comment respecter la ville d’arrivée, la ville de retour et les horaires.
+
+RÈGLES PRIORITAIRES :
+- itinerary doit contenir exactement ${daysCount} jours.
+- Le dernier jour ne doit jamais être vide.
+- Si l’heure de départ est inconnue ou tardive, propose une demi-journée légère.
+- Si la ville de retour est renseignée, la dernière nuit doit être compatible avec cette ville.
+- Si le départ est le matin, il faut dormir la veille dans la ville de retour.
+- Ne répète pas plusieurs fois le même musée, food hall, restaurant, marché ou quartier.
+- Pour un long voyage, ne remplis pas tous les jours restants dans la ville de retour : répartis les nuits entre plusieurs bases cohérentes.
+- Si la voiture est à éviter, utilise train, bus, métro, ferry, tram, vaporetto ou taxi.
+- Si le style est insolite, au moins 40 % des activités doivent être locales, cachées, alternatives ou moins évidentes.
+- Si le style est incontournables, couvre les lieux majeurs évidents de la destination.
+- Chaque intérêt sélectionné doit apparaître dans au moins une vraie activité.
+- Le budget doit être clair, prudent, et éviter les devises mélangées. Privilégie EUR comme devise principale d’affichage.
+- Les hôtels précis doivent être présentés avec prudence : prix à vérifier.
 
 STRUCTURE PAR JOUR :
-- city : ville principale du jour
+- city : ville principale du jour et ville de nuitée si ce n’est pas le dernier jour
 - lat/lng : coordonnées GPS de la ville
 - title : titre accrocheur de la journée
-- description : thème/ambiance du jour en 1-2 phrases
-- activities : liste ordonnée chronologiquement avec time (ex: "09:00"), name, description courte, type (visite/repas/activite/transport/detente/shopping), estimated_cost en devise locale, lat/lng si possible
-- hotel : nom d'un hôtel recommandé adapté au budget
-- restaurant : restaurant du dîner recommandé
-- transport_to_next : si déplacement vers autre ville le lendemain, fournis destination_city et options (mode, description, duration, estimated_cost)
+- description : explique la logique de la journée, le rythme, les transports importants ou la raison de dormir ici
+- activities : liste chronologique avec time, name, description courte mais utile, type, estimated_cost, duration, tags, lat, lng
+- hotel : ville où dormir + type d’hébergement adapté au budget
+- restaurant : dîner recommandé ou null le dernier jour
+- transport_to_next : uniquement si la ville change le lendemain, avec destination_city, mode, description, duration, estimated_cost
 
 RÈGLES GÉOGRAPHIQUES :
-- Regrouper les activités par quartier pour éviter trop de trajets
-- Ne pas mettre des lieux géographiquement incohérents dans la même journée
+- Regroupe les activités par quartier.
+- Évite les zigzags.
+- Indique dans les descriptions quand un métro, train, vaporetto, bus ou taxi est préférable.
+- Les grands musées doivent avoir assez de temps de visite.
+- Ne place pas une grosse visite trop près de la fermeture.
 
 SECTIONS SUPPLÉMENTAIRES :
-- summary : résumé du voyage (2-3 phrases en français)
-- estimated_total_cost : coût total estimé pour ${formData.travelers} personne(s)
-- tips : 5 conseils pratiques personnalisés pour CE voyage spécifique
-- must_book : 3 expériences à réserver absolument à l'avance (noms concrets)
-- weather_alternative : 2-3 activités alternatives si mauvaise météo
+- summary : résumé du voyage en expliquant la stratégie de route et de nuitées
+- estimated_total_cost : estimation prudente pour ${formData.travelers} personne(s), en EUR de préférence
+- currency : EUR sauf nécessité claire
+- currency_symbol : €
+- tips : 5 conseils pratiques personnalisés
+- must_book : 3 réservations prioritaires concrètes
+- weather_alternative : alternatives météo pertinentes pour les différentes villes du voyage, pas seulement la première ville
 
-Réponds uniquement en français. Sois précis, concret et vraiment utile.`;
+Réponds uniquement en JSON strict, en français, sans markdown, sans texte autour.`;
 
       const result = await base44.integrations.Core.InvokeLLM({
         prompt,
