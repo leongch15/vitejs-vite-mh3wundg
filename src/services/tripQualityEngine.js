@@ -135,6 +135,7 @@ const addRepair = (repairs, repair) => {
 };
 
 const scoreImpact = {
+  p0: 35,
   critical: 25,
   high: 15,
   medium: 8,
@@ -214,9 +215,211 @@ const isCityTrip = (trip = {}, formData = {}) => {
   return cities.length === 1 && destination && cities[0] && (destination === cities[0] || cities[0].includes(destination) || destination.includes(cities[0]));
 };
 
+
+const DESTINATION_KEYWORDS = {
+  paris: ['paris', 'montmartre', 'louvre', 'seine', 'trocadero', 'marais', 'saint-germain'],
+  france: ['paris', 'lyon', 'marseille', 'nice', 'bordeaux', 'strasbourg', 'lille', 'nantes', 'toulouse'],
+  danemark: [
+    'danemark',
+    'denmark',
+    'copenhague',
+    'copenhagen',
+    'odense',
+    'aarhus',
+    'aalborg',
+    'skagen',
+    'roskilde',
+    'helsingor',
+    'helsingør',
+    'billund',
+    'tivoli',
+    'nyhavn',
+  ],
+  denmark: [
+    'danemark',
+    'denmark',
+    'copenhague',
+    'copenhagen',
+    'odense',
+    'aarhus',
+    'aalborg',
+    'skagen',
+    'roskilde',
+    'helsingor',
+    'helsingør',
+    'billund',
+    'tivoli',
+    'nyhavn',
+  ],
+  italie: [
+    'italie',
+    'italy',
+    'rome',
+    'roma',
+    'florence',
+    'firenze',
+    'venise',
+    'venezia',
+    'venice',
+    'naples',
+    'napoli',
+    'bologne',
+    'bologna',
+    'verone',
+    'verona',
+    'pise',
+    'pisa',
+    'milan',
+    'milano',
+    'turin',
+    'torino',
+    'sienne',
+    'siena',
+  ],
+  italy: [
+    'italie',
+    'italy',
+    'rome',
+    'roma',
+    'florence',
+    'firenze',
+    'venise',
+    'venezia',
+    'venice',
+    'naples',
+    'napoli',
+    'bologne',
+    'bologna',
+    'verone',
+    'verona',
+    'pise',
+    'pisa',
+    'milan',
+    'milano',
+    'turin',
+    'torino',
+    'sienne',
+    'siena',
+  ],
+  espagne: ['espagne', 'spain', 'barcelone', 'barcelona', 'madrid', 'valence', 'valencia', 'seville', 'sevilla', 'grenade', 'granada'],
+  portugal: ['portugal', 'lisbonne', 'lisbon', 'porto', 'faro', 'sintra', 'coimbra'],
+};
+
+const getDestinationKeywords = (destination = '') => {
+  const normalized = normalizeText(destination);
+
+  if (!normalized) return [];
+
+  const directKey = Object.keys(DESTINATION_KEYWORDS).find((key) => normalized.includes(key));
+
+  if (directKey) return DESTINATION_KEYWORDS[directKey];
+
+  return [normalized];
+};
+
+const isDestinationClearlyIncoherent = ({ trip, formData, tripText }) => {
+  const requestedDestination = normalizeText(formData.destination || '');
+  const generatedDestination = normalizeText(trip.destination || '');
+  const cities = toArray(trip.itinerary).map((day) => normalizeText(day.city)).filter(Boolean);
+
+  if (!requestedDestination) return false;
+
+  // Cas direct : le voyage généré annonce explicitement une autre destination connue.
+  const wrongKnownDestinations = Object.keys(DESTINATION_KEYWORDS).filter((key) => !requestedDestination.includes(key));
+
+  if (
+    generatedDestination &&
+    generatedDestination !== requestedDestination &&
+    wrongKnownDestinations.some((key) => generatedDestination.includes(key)) &&
+    !tripText.includes(requestedDestination)
+  ) {
+    return true;
+  }
+
+  const keywords = getDestinationKeywords(requestedDestination);
+
+  if (keywords.length === 0) return false;
+
+  const expectedHit = keywords.some((keyword) => tripText.includes(normalizeText(keyword)));
+
+  if (expectedHit) return false;
+
+  // Si aucune ville / aucun lieu attendu n’apparaît, et que des villes sont présentes, c’est suspect.
+  return cities.length > 0;
+};
+
+const isOnlyDepartureDay = (day = {}) => {
+  const activities = toArray(day.activities);
+
+  if (activities.length !== 1) return false;
+
+  const text = compactText(activities[0]?.name, activities[0]?.description, activities[0]?.type);
+
+  return text.includes('depart') || text.includes('aeroport') || text.includes('gare');
+};
+
+const hasActivityAfterDeparture = (day = {}, departureHour) => {
+  if (departureHour === null || departureHour === undefined) return false;
+
+  return toArray(day.activities).some((activity) => {
+    const hour = getHourFromTime(activity?.time);
+    if (hour === null) return false;
+
+    // On laisse une marge si l’activité est le départ lui-même.
+    const text = compactText(activity?.name, activity?.description, activity?.type);
+    if (text.includes('depart') || text.includes('aeroport') || text.includes('gare')) {
+      return hour > departureHour + 1;
+    }
+
+    return hour > departureHour;
+  });
+};
+
+const getCityDominance = (itinerary = []) => {
+  const cityCounts = itinerary.reduce((acc, day) => {
+    const city = normalizeText(day.city);
+    if (!city) return acc;
+    acc[city] = (acc[city] || 0) + 1;
+    return acc;
+  }, {});
+
+  const entries = Object.entries(cityCounts).sort((a, b) => b[1] - a[1]);
+  const dominant = entries[0] || null;
+
+  return {
+    cityCounts,
+    dominantCity: dominant?.[0] || null,
+    dominantCount: dominant?.[1] || 0,
+    cityCount: entries.length,
+  };
+};
+
+const isExcessiveCityDominance = ({ trip, formData }) => {
+  const itinerary = toArray(trip.itinerary);
+
+  if (itinerary.length < 8 || isCityTrip(trip, formData)) {
+    return false;
+  }
+
+  const { dominantCount, cityCount } = getCityDominance(itinerary);
+
+  if (cityCount <= 1 && itinerary.length >= 8) return true;
+
+  if (itinerary.length >= 10 && dominantCount >= Math.ceil(itinerary.length * 0.6)) {
+    return true;
+  }
+
+  if (itinerary.length >= 12 && dominantCount >= 6) {
+    return true;
+  }
+
+  return false;
+};
+
+
 const buildSummary = ({ score, blockers, warnings }) => {
   if (blockers.length > 0) {
-    return `Voyage à corriger avant affichage public : ${blockers.length} blocage(s) et ${warnings.length} avertissement(s).`;
+    return `Voyage bloqué : ${blockers.length} blocker(s) P0/P1 et ${warnings.length} avertissement(s).`;
   }
 
   if (score >= 85) {
@@ -241,6 +444,21 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
   const destination = String(formData.destination || trip.destination || 'voyage');
   const returnCity = normalizeText(formData.return_city || formData.returnCity || trip.return_city || trip.returnCity);
   const departureHour = getHourFromTime(formData.departure_time || formData.departureTime || trip.departure_time || trip.departureTime);
+
+  if (isDestinationClearlyIncoherent({ trip, formData, tripText })) {
+    addIssue(blockers, {
+      id: 'destination_incoherent',
+      severity: 'p0',
+      message: `La destination générée semble incohérente avec la destination demandée (${destination}).`,
+      path: 'destination',
+    });
+    addRepair(repairs, {
+      id: 'repair_destination_incoherent',
+      priority: 'critical',
+      message: 'Ne pas afficher ce voyage : relancer la génération avec la destination du formulaire ou utiliser le fallback formData.',
+      target: 'destination',
+    });
+  }
 
   if (itinerary.length === 0) {
     addIssue(blockers, {
@@ -402,19 +620,34 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
       const isOnlyDeparture = onlyActivityText.includes('depart') || onlyActivityText.includes('gare') || onlyActivityText.includes('aeroport');
 
       if (isOnlyDeparture && (departureHour === null || departureHour >= 12)) {
-        addIssue(warnings, {
-          id: 'weak_last_day',
-          severity: 'medium',
-          message: 'Le dernier jour semble trop léger alors que le départ n’est pas clairement tôt.',
+        addIssue(blockers, {
+          id: 'last_day_only_departure_without_early_departure',
+          severity: 'high',
+          message: 'Le dernier jour contient seulement un départ alors que le départ n’est pas clairement tôt.',
           path: `itinerary[${itinerary.length - 1}].activities`,
         });
         addRepair(repairs, {
           id: 'repair_weak_last_day',
-          priority: 'medium',
+          priority: 'high',
           message: 'Ajouter 1 à 3 activités légères avant le départ.',
           target: `itinerary[${itinerary.length - 1}]`,
         });
       }
+    }
+
+    if (hasActivityAfterDeparture(lastDay, departureHour)) {
+      addIssue(blockers, {
+        id: 'activity_after_departure',
+        severity: 'p0',
+        message: 'Le dernier jour contient une activité après l’heure de départ.',
+        path: `itinerary[${itinerary.length - 1}].activities`,
+      });
+      addRepair(repairs, {
+        id: 'repair_activity_after_departure',
+        priority: 'critical',
+        message: 'Supprimer ou déplacer les activités après l’heure de départ.',
+        target: `itinerary[${itinerary.length - 1}]`,
+      });
     }
 
     if (lastActivities.some(looksLikeDinner)) {
@@ -497,22 +730,27 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
   }
 
   if (itinerary.length >= 7 && !isCityTrip(trip, formData)) {
-    const cityCounts = itinerary.reduce((acc, day) => {
-      const city = normalizeText(day.city);
-      if (!city) return acc;
-      acc[city] = (acc[city] || 0) + 1;
-      return acc;
-    }, {});
-
-    const cityEntries = Object.entries(cityCounts);
-    const maxCity = cityEntries.sort((a, b) => b[1] - a[1])[0];
+    const { dominantCity, dominantCount } = getCityDominance(itinerary);
     const dominanceLimit = itinerary.length >= 10 ? Math.ceil(itinerary.length * 0.45) : Math.ceil(itinerary.length * 0.65);
 
-    if (maxCity && maxCity[1] > dominanceLimit) {
+    if (isExcessiveCityDominance({ trip, formData })) {
+      addIssue(blockers, {
+        id: 'city_over_dominance_p0',
+        severity: 'high',
+        message: `La ville "${dominantCity}" occupe ${dominantCount} jour(s), ce qui déséquilibre fortement le voyage.`,
+        path: 'itinerary.city',
+      });
+      addRepair(repairs, {
+        id: 'repair_city_balance_p0',
+        priority: 'high',
+        message: 'Relancer la génération en imposant plusieurs bases ou étapes cohérentes.',
+        target: 'itinerary',
+      });
+    } else if (dominantCity && dominantCount > dominanceLimit) {
       addIssue(warnings, {
         id: 'city_over_dominance',
         severity: 'medium',
-        message: `La ville "${maxCity[0]}" occupe ${maxCity[1]} jour(s), ce qui peut déséquilibrer le voyage.`,
+        message: `La ville "${dominantCity}" occupe ${dominantCount} jour(s), ce qui peut déséquilibrer le voyage.`,
         path: 'itinerary.city',
       });
       addRepair(repairs, {
