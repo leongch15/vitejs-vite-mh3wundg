@@ -64,3 +64,6 @@ Toutes les nouvelles modifications doivent être faites uniquement sur le projet
 - react-leaflet supprimé car la carte utilise maintenant MapLibre.
 - maplibre-gl conservé pour la carte géographique gratuite.
 - Test après suppression : homepage OK, Mes voyages OK, détail voyage OK, carte OK.
+
+## Nettoyage dépendances Lot 6.1 — Figer l’état actuel
+URL actuelle : https://vitejs-vite-mh3wundg.vercel.app/
