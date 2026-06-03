@@ -417,20 +417,255 @@ const isExcessiveCityDominance = ({ trip, formData }) => {
 };
 
 
+
+const getBudgetLevel = (formData = {}, trip = {}) => {
+  const raw = normalizeText(formData.budget || trip.budget || '');
+
+  if (raw.includes('eco')) return 'economique';
+  if (raw.includes('luxe') || raw.includes('luxury')) return 'luxe';
+  if (raw.includes('confort')) return 'confort';
+  if (raw.includes('modere') || raw.includes('moderate')) return 'modere';
+
+  return 'modere';
+};
+
+const getTravelersCount = (formData = {}, trip = {}) => {
+  const travelers = Number(formData.travelers || trip.travelers || 1);
+  return Number.isFinite(travelers) && travelers > 0 ? travelers : 1;
+};
+
+const parseMoneyAmount = (value = '') => {
+  const text = String(value || '')
+    .replace(/\s/g, '')
+    .replace(',', '.');
+
+  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)/g)].map((match) => Number(match[1]));
+  const amounts = matches.filter((amount) => Number.isFinite(amount) && amount > 0);
+
+  if (amounts.length === 0) return null;
+
+  return Math.max(...amounts);
+};
+
+const estimateMinimumTripCost = ({ destination, budget, travelers, daysCount }) => {
+  const normalizedDestination = normalizeText(destination);
+
+  const destinationMultiplier =
+    normalizedDestination.includes('danemark') ||
+    normalizedDestination.includes('denmark') ||
+    normalizedDestination.includes('copenhague') ||
+    normalizedDestination.includes('copenhagen')
+      ? 1.45
+      : normalizedDestination.includes('paris')
+        ? 1.25
+        : normalizedDestination.includes('italie') || normalizedDestination.includes('italy')
+          ? 1.15
+          : 1;
+
+  const dailyBaseByBudget = {
+    economique: 75,
+    modere: 115,
+    confort: 160,
+    luxe: 260,
+  };
+
+  const base = dailyBaseByBudget[budget] || dailyBaseByBudget.modere;
+
+  return Math.round(base * destinationMultiplier * travelers * Math.max(daysCount || 1, 1));
+};
+
+const hasClearlyLowBudget = ({ trip, formData, expectedDays }) => {
+  const amount = parseMoneyAmount(trip.estimated_total_cost);
+  if (!amount) return false;
+
+  const travelers = getTravelersCount(formData, trip);
+  const budget = getBudgetLevel(formData, trip);
+  const minimum = estimateMinimumTripCost({
+    destination: formData.destination || trip.destination,
+    budget,
+    travelers,
+    daysCount: expectedDays || toArray(trip.itinerary).length || 1,
+  });
+
+  return amount < minimum * 0.65;
+};
+
+const isGenericActivity = (activity = {}) => {
+  const text = compactText(activity.name, activity.description);
+
+  const genericPatterns = [
+    'soiree libre',
+    'temps libre',
+    'dejeuner libre',
+    'diner libre',
+    'restaurant local',
+    'bistrot local',
+    'cafe local',
+    'pause gourmande',
+    'selon vos envies',
+    'quartier anime',
+    'balade libre',
+    'activite libre',
+    'a proximite',
+    'zone centrale',
+    'a verifier',
+    'selon transport',
+    'variable',
+  ];
+
+  return genericPatterns.some((pattern) => text.includes(pattern));
+};
+
+const countGenericActivities = (trip = {}) => {
+  return toArray(trip.itinerary).reduce((total, day) => {
+    return total + toArray(day.activities).filter(isGenericActivity).length;
+  }, 0);
+};
+
+const isMajorCityChangeTransportMissing = (day = {}, nextDay = null) => {
+  if (!nextDay) return false;
+
+  const currentCity = normalizeText(day.city);
+  const nextCity = normalizeText(nextDay.city);
+
+  if (!currentCity || !nextCity || currentCity === nextCity) return false;
+
+  return !day.transport_to_next || !toArray(day.transport_to_next.options).length;
+};
+
+const getMissingTransports = (itinerary = []) => {
+  const missing = [];
+
+  itinerary.forEach((day, index) => {
+    const nextDay = itinerary[index + 1];
+
+    if (isMajorCityChangeTransportMissing(day, nextDay)) {
+      missing.push({
+        dayIndex: index,
+        from: day.city,
+        to: nextDay.city,
+      });
+    }
+  });
+
+  return missing;
+};
+
+const getDayActivitySpan = (day = {}) => {
+  const hours = toArray(day.activities)
+    .map((activity) => getHourFromTime(activity.time))
+    .filter((hour) => hour !== null)
+    .sort((a, b) => a - b);
+
+  if (hours.length < 2) {
+    return {
+      firstHour: hours[0] ?? null,
+      lastHour: hours[0] ?? null,
+      span: 0,
+    };
+  }
+
+  return {
+    firstHour: hours[0],
+    lastHour: hours[hours.length - 1],
+    span: hours[hours.length - 1] - hours[0],
+  };
+};
+
+const getApproxDistanceKm = (a = {}, b = {}) => {
+  if (!hasValidLatLng(a) || !hasValidLatLng(b)) return null;
+
+  const toRad = (value) => (Number(value) * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+
+  const dLat = toRad(Number(b.lat) - Number(a.lat));
+  const dLng = toRad(Number(b.lng) - Number(a.lng));
+  const lat1 = toRad(Number(a.lat));
+  const lat2 = toRad(Number(b.lat));
+
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
+};
+
+const getDayJumpDistances = (day = {}) => {
+  const activities = toArray(day.activities).filter(hasValidLatLng);
+  const distances = [];
+
+  for (let index = 0; index < activities.length - 1; index += 1) {
+    const distance = getApproxDistanceKm(activities[index], activities[index + 1]);
+
+    if (distance !== null) {
+      distances.push(distance);
+    }
+  }
+
+  return distances;
+};
+
+const isDayPotentiallyTooDispersed = ({ day, walkingLevel }) => {
+  const activities = toArray(day.activities);
+  if (activities.length < 4) return false;
+
+  const normalizedWalking = normalizeText(walkingLevel || '');
+  const jumpDistances = getDayJumpDistances(day);
+  const longJumps = jumpDistances.filter((distance) => distance >= 3.5).length;
+  const veryLongJumps = jumpDistances.filter((distance) => distance >= 7).length;
+  const { span } = getDayActivitySpan(day);
+
+  if (veryLongJumps >= 1 && span >= 8) return true;
+  if (longJumps >= 2) return true;
+  if ((normalizedWalking.includes('faible') || normalizedWalking.includes('moderee') || normalizedWalking.includes('moyen')) && span >= 12) return true;
+
+  return false;
+};
+
+const hasWeakInterestCoverage = ({ tripText, interest }) => {
+  const normalizedInterest = normalizeText(interest);
+  const rules =
+    getInterestRules()[normalizedInterest] ||
+    getInterestRules()[interest] ||
+    getInterestRules()[normalizedInterest.replace(/\s+/g, '_')];
+
+  if (!rules || rules.length === 0) return false;
+
+  const hits = rules.filter((keyword) => tripText.includes(normalizeText(keyword))).length;
+
+  return hits === 1;
+};
+
+const getP1WarningCount = (warnings = []) => {
+  const p1WarningIds = new Set([
+    'budget_probably_too_low',
+    'many_generic_activities',
+    'repeated_activities',
+    'interest_weakly_covered',
+    'missing_transport_between_cities',
+    'day_too_dispersed',
+  ]);
+
+  return warnings.filter((warning) => p1WarningIds.has(warning.id) || warning.severity === 'medium').length;
+};
+
+
 const buildSummary = ({ score, blockers, warnings }) => {
+  const p1Count = getP1WarningCount(warnings);
+
   if (blockers.length > 0) {
     return `Voyage bloqué : ${blockers.length} blocker(s) P0/P1 et ${warnings.length} avertissement(s).`;
   }
 
-  if (score >= 85) {
+  if (score >= 85 && p1Count === 0) {
     return `Voyage solide : score ${score}/100, sans blocage détecté.`;
   }
 
   if (score >= 70) {
-    return `Voyage exploitable mais perfectible : score ${score}/100, ${warnings.length} avertissement(s).`;
+    return `Voyage exploitable mais perfectible : score ${score}/100, ${warnings.length} avertissement(s), dont ${p1Count} warning(s) P1.`;
   }
 
-  return `Voyage fragile : score ${score}/100, ${warnings.length} avertissement(s). Une relance IA ou réparation est recommandée.`;
+  return `Voyage fragile : score ${score}/100, ${warnings.length} avertissement(s), dont ${p1Count} warning(s) P1. Une relance IA ou réparation est recommandée.`;
 };
 
 export const analyzeTripQuality = (trip = {}, formData = {}) => {
@@ -594,6 +829,83 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
         });
       }
     });
+  });
+
+
+  if (hasClearlyLowBudget({ trip, formData, expectedDays })) {
+    addIssue(warnings, {
+      id: 'budget_probably_too_low',
+      severity: 'medium',
+      message: 'Le budget total semble probablement trop bas pour la destination, la durée, le nombre de voyageurs ou le niveau de budget choisi.',
+      path: 'estimated_total_cost',
+    });
+    addRepair(repairs, {
+      id: 'repair_low_budget',
+      priority: 'medium',
+      message: 'Recalculer le budget côté app avec hébergement, repas, activités, transports locaux, inter-villes et marge de sécurité.',
+      target: 'budget',
+    });
+  }
+
+  const genericActivityCount = countGenericActivities(trip);
+
+  if (genericActivityCount >= 3) {
+    addIssue(warnings, {
+      id: 'many_generic_activities',
+      severity: 'medium',
+      message: `${genericActivityCount} activité(s) semblent trop génériques ou peu exploitables.`,
+      path: 'itinerary.activities',
+    });
+    addRepair(repairs, {
+      id: 'repair_many_generic_activities',
+      priority: 'medium',
+      message: 'Remplacer les formulations vagues par des lieux, quartiers, durées ou conseils concrets.',
+      target: 'itinerary.activities',
+    });
+  }
+
+  const missingTransports = getMissingTransports(itinerary);
+
+  if (missingTransports.length > 0) {
+    const examples = missingTransports
+      .slice(0, 3)
+      .map((item) => `jour ${item.dayIndex + 1} : ${item.from} → ${item.to}`)
+      .join(', ');
+
+    addIssue(warnings, {
+      id: 'missing_transport_between_cities',
+      severity: 'medium',
+      message: `Transport inter-ville manquant alors que la ville change (${examples}).`,
+      path: 'itinerary.transport_to_next',
+    });
+    addRepair(repairs, {
+      id: 'repair_missing_intercity_transport',
+      priority: 'medium',
+      message: 'Ajouter transport_to_next avec mode, durée et coût estimé sur chaque changement de ville.',
+      target: 'itinerary.transport_to_next',
+    });
+  }
+
+  itinerary.forEach((day, dayIndex) => {
+    if (
+      isDayPotentiallyTooDispersed({
+        day,
+        walkingLevel: formData.walking_level || formData.walkingLevel || trip.walking_level || trip.walkingLevel,
+      })
+    ) {
+      addIssue(warnings, {
+        id: 'day_too_dispersed',
+        severity: 'medium',
+        message: `Le jour ${dayIndex + 1} semble trop dispersé ou trop long pour le niveau de marche demandé.`,
+        path: `itinerary[${dayIndex}]`,
+      });
+      addRepair(repairs, {
+        id: 'repair_dispersed_day',
+        priority: 'medium',
+        message: `Regrouper les activités du jour ${dayIndex + 1} par quartier ou ajouter des transports conseillés.`,
+        target: `itinerary[${dayIndex}]`,
+      });
+    }
   });
 
   if (itinerary.length > 0) {
@@ -850,6 +1162,22 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
         message: `Ajouter au moins une activité concrète liée à "${interest}".`,
         target: 'itinerary.activities',
       });
+      return;
+    }
+
+    if (hasWeakInterestCoverage({ tripText, interest })) {
+      addIssue(warnings, {
+        id: 'interest_weakly_covered',
+        severity: 'medium',
+        message: `L’intérêt "${interest}" est présent mais semble peu couvert.`,
+        path: 'itinerary',
+      });
+      addRepair(repairs, {
+        id: `repair_weak_interest_${normalizedInterest.replace(/\s+/g, '_')}`,
+        priority: 'medium',
+        message: `Renforcer l’intérêt "${interest}" avec une activité plus visible ou mieux décrite.`,
+        target: 'itinerary.activities',
+      });
     }
   });
 
@@ -911,15 +1239,29 @@ export const analyzeTripQuality = (trip = {}, formData = {}) => {
           ? 'usable'
           : 'fragile';
 
+  const p1_warnings = warnings.filter(
+    (warning) => warning.severity === 'medium' ||
+      [
+        'budget_probably_too_low',
+        'many_generic_activities',
+        'repeated_activities',
+        'interest_weakly_covered',
+        'missing_transport_between_cities',
+        'day_too_dispersed',
+      ].includes(warning.id)
+  );
+
   return {
     score,
     status,
     blockers,
     warnings,
+    p1_warnings,
+    p1_warning_count: p1_warnings.length,
     repairs,
     summary: buildSummary({ score, blockers, warnings }),
     checked_at: new Date().toISOString(),
-    version: 'trip-quality-engine-v1.0.0',
+    version: 'trip-quality-engine-v1.1.0',
   };
 };
 
