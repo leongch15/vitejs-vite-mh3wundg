@@ -5,6 +5,66 @@ const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
+const OPENAI_PRICING_USD_PER_1M_TOKENS = {
+  'gpt-4.1-mini': {
+    input: 0.4,
+    output: 1.6,
+  },
+  'gpt-4o-mini': {
+    input: 0.15,
+    output: 0.6,
+  },
+};
+
+const normalizeTokenUsage = (usage = {}) => {
+  if (!usage || typeof usage !== 'object') {
+    return {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      raw: usage || null,
+    };
+  }
+
+  const inputTokens =
+    Number(usage.input_tokens) ||
+    Number(usage.prompt_tokens) ||
+    Number(usage.promptTokenCount) ||
+    0;
+
+  const outputTokens =
+    Number(usage.output_tokens) ||
+    Number(usage.completion_tokens) ||
+    Number(usage.candidatesTokenCount) ||
+    0;
+
+  const totalTokens =
+    Number(usage.total_tokens) ||
+    Number(usage.totalTokenCount) ||
+    inputTokens + outputTokens;
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    raw: usage,
+  };
+};
+
+const estimateProviderCostUsd = ({ provider, model, usage } = {}) => {
+  if (provider !== 'openai') return 0;
+
+  const pricing = OPENAI_PRICING_USD_PER_1M_TOKENS[model] || OPENAI_PRICING_USD_PER_1M_TOKENS['gpt-4.1-mini'];
+  const normalizedUsage = normalizeTokenUsage(usage);
+  const inputCost = (normalizedUsage.input_tokens / 1_000_000) * pricing.input;
+  const outputCost = (normalizedUsage.output_tokens / 1_000_000) * pricing.output;
+  const total = inputCost + outputCost;
+
+  if (!Number.isFinite(total) || total < 0) return 0;
+
+  return Number(total.toFixed(6));
+};
+
 const DEFAULT_SYSTEM_PROMPT = `
 Tu es Capi, un assistant expert en création d'itinéraires de voyage réalistes.
 Tu dois répondre uniquement avec un objet JSON strict, sans markdown.
@@ -1018,6 +1078,11 @@ const callOpenAI = async ({ prompt, form, promptVersion, systemPrompt }) => {
     model: OPENAI_MODEL,
     promptVersion: promptVersion || null,
     usage: data.usage || null,
+    estimatedCostUsd: estimateProviderCostUsd({
+      provider: 'openai',
+      model: OPENAI_MODEL,
+      usage: data.usage,
+    }),
   };
 };
 
@@ -1083,6 +1148,11 @@ const callGemini = async ({ prompt, form, promptVersion, systemPrompt }) => {
     model: GEMINI_MODEL,
     promptVersion: promptVersion || null,
     usage: data.usageMetadata || null,
+    estimatedCostUsd: estimateProviderCostUsd({
+      provider: 'gemini',
+      model: GEMINI_MODEL,
+      usage: data.usageMetadata,
+    }),
   };
 };
 

@@ -259,11 +259,21 @@ Réponds uniquement en JSON strict, en français, sans markdown, sans texte auto
         must_book: result.must_book || [],
         weather_alternative: result.weather_alternative || [],
 
-        // Champs techniques utiles pour vérifier si la génération vient de l'IA.
+        // Champs techniques utiles pour vérifier et auditer chaque génération.
         generation_source: result.generation_source,
-        prompt_version: result.prompt_version,
+        ai_provider: result.ai_provider,
         ai_error: result.ai_error,
+        fallback_used: result.fallback_used || false,
+        prompt_version: result.prompt_version,
+        duration_ms: result.duration_ms,
+        estimated_cost_usd: result.estimated_cost_usd,
+        quality_score: result.quality_score,
+        generation_model: result.generation_model,
+        generation_usage: result.generation_usage,
+        generation_trace: result.generation_trace,
+        fallback_at: result.fallback_at,
         generated_at: result.generated_at,
+        post_ai_validation: result.post_ai_validation,
       };
 
       const created = await base44.entities.Trip.create(tripData);

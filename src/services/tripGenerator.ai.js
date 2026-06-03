@@ -11,6 +11,10 @@ import {
   generateLocalTrip,
 } from '@/services/tripGenerator.local';
 
+import {
+  buildGenerationLog,
+} from '@/services/generationLogger';
+
 const parseJsonSafely = (value) => {
   if (!value) {
     throw new Error('Réponse IA vide.');
@@ -61,7 +65,19 @@ const callServerlessTripEndpoint = async ({ prompt, form, signal }) => {
     );
   }
 
-  return parseJsonSafely(data.trip || data.result || data.content || data);
+  const trip = parseJsonSafely(data.trip || data.result || data.content || data);
+
+  return {
+    ...trip,
+    ai_provider: data.source || data.provider || trip.ai_provider || null,
+    generation_model: data.model || trip.generation_model || null,
+    generation_usage: data.usage || trip.generation_usage || null,
+    estimated_cost_usd:
+      data.estimatedCostUsd ??
+      data.estimated_cost_usd ??
+      trip.estimated_cost_usd ??
+      null,
+  };
 };
 
 const withTimeout = async (promiseFactory, timeoutMs) => {
@@ -118,16 +134,29 @@ export const generateTripWithAI = async ({
   form,
   fallbackToLocal = AI_SETTINGS.fallbackToLocal,
 } = {}) => {
+  const startedAt = Date.now();
+
   try {
     const trip = await withTimeout(
       (signal) => callServerlessTripEndpoint({ prompt, form, signal }),
       AI_SETTINGS.timeoutMs
     );
 
+    const durationMs = Date.now() - startedAt;
+    const generationLog = buildGenerationLog({
+      trip,
+      generationSource: 'ai',
+      aiProvider: trip.ai_provider,
+      promptVersion: TRIP_PROMPT_VERSION,
+      durationMs,
+      model: trip.generation_model,
+      usage: trip.generation_usage,
+      estimatedCostUsd: trip.estimated_cost_usd,
+    });
+
     return {
       ...trip,
-      generation_source: 'ai',
-      prompt_version: TRIP_PROMPT_VERSION,
+      ...generationLog,
     };
   } catch (error) {
     console.warn('[Capi] Génération IA indisponible, fallback local utilisé.', error);
@@ -137,14 +166,24 @@ export const generateTripWithAI = async ({
     }
 
     const fallbackTrip = generateFallbackTrip({ prompt, form });
+    const durationMs = Date.now() - startedAt;
+    const aiError = error?.message || 'Erreur IA inconnue';
+    const generationLog = buildGenerationLog({
+      trip: fallbackTrip,
+      generationSource: 'local_fallback',
+      aiProvider: 'local',
+      aiError,
+      fallbackUsed: true,
+      promptVersion: TRIP_PROMPT_VERSION,
+      durationMs,
+      model: 'local-generator',
+      usage: null,
+      estimatedCostUsd: 0,
+    });
 
     return {
       ...fallbackTrip,
-      generation_source: 'local_fallback',
-      ai_provider: 'local',
-      prompt_version: TRIP_PROMPT_VERSION,
-      ai_error: error?.message || 'Erreur IA inconnue',
-      fallback_used: true,
+      ...generationLog,
       fallback_at: new Date().toISOString(),
     };
   }

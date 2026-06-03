@@ -5,6 +5,8 @@ import {
 
 import { generateTripWithAI } from '@/services/tripGenerator.ai';
 import { generateLocalTrip } from '@/services/tripGenerator.local';
+import { TRIP_PROMPT_VERSION } from '@/services/prompts/tripPrompt';
+import { buildGenerationLog } from '@/services/generationLogger';
 
 import {
   createTrip,
@@ -62,7 +64,25 @@ const generateTrip = async ({ prompt, form }) => {
 
   // Important : le mode local ne parse plus le prompt texte pour retrouver
   // la destination. Il utilise les vraies valeurs du formulaire.
-  return generateLocalTripFromForm(form);
+  const startedAt = Date.now();
+  const localTrip = generateLocalTripFromForm(form);
+  const durationMs = Date.now() - startedAt;
+  const generationLog = buildGenerationLog({
+    trip: localTrip,
+    generationSource: 'local',
+    aiProvider: 'local',
+    fallbackUsed: false,
+    promptVersion: TRIP_PROMPT_VERSION,
+    durationMs,
+    model: 'local-generator',
+    usage: null,
+    estimatedCostUsd: 0,
+  });
+
+  return {
+    ...localTrip,
+    ...generationLog,
+  };
 };
 
 export const base44 = {
