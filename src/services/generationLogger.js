@@ -1,3 +1,5 @@
+import { analyzeTripQuality } from '@/services/tripQualityEngine';
+
 const OPENAI_PRICING_USD_PER_1M_TOKENS = {
   'gpt-4.1-mini': {
     input: 0.4,
@@ -159,6 +161,7 @@ export const buildGenerationLog = ({
   model = null,
   usage = null,
   estimatedCostUsd = null,
+  formData = {},
 } = {}) => {
   const provider = normalizeProvider(aiProvider || trip.ai_provider);
   const normalizedUsage = normalizeTokenUsage(usage || trip.generation_usage);
@@ -168,9 +171,14 @@ export const buildGenerationLog = ({
     usage: normalizedUsage.raw || usage,
   });
 
+  const quality =
+    trip.quality && typeof trip.quality === 'object'
+      ? trip.quality
+      : analyzeTripQuality(trip, formData);
+
   const qualityScore =
     trip.quality_score ??
-    trip.quality?.score ??
+    quality?.score ??
     calculateInitialQualityScore({
       trip,
       generationSource,
@@ -186,6 +194,12 @@ export const buildGenerationLog = ({
     duration_ms: Number.isFinite(Number(durationMs)) ? Math.round(Number(durationMs)) : null,
     estimated_cost_usd: roundUsd(cost),
     quality_score: qualityScore,
+    quality,
+    quality_status: quality?.status || null,
+    quality_summary: quality?.summary || null,
+    quality_blockers: quality?.blockers || [],
+    quality_warnings: quality?.warnings || [],
+    quality_repairs: quality?.repairs || [],
     generation_model: model || trip.generation_model || null,
     generation_usage: normalizedUsage,
     generation_trace: {
@@ -197,6 +211,8 @@ export const buildGenerationLog = ({
       duration_ms: Number.isFinite(Number(durationMs)) ? Math.round(Number(durationMs)) : null,
       estimated_cost_usd: roundUsd(cost),
       quality_score: qualityScore,
+      quality_status: quality?.status || null,
+      quality_summary: quality?.summary || null,
       generation_model: model || trip.generation_model || null,
       token_usage: normalizedUsage,
       created_at: new Date().toISOString(),

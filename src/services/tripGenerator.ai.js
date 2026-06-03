@@ -152,6 +152,7 @@ export const generateTripWithAI = async ({
       model: trip.generation_model,
       usage: trip.generation_usage,
       estimatedCostUsd: trip.estimated_cost_usd,
+      formData: form,
     });
 
     return {
@@ -179,6 +180,7 @@ export const generateTripWithAI = async ({
       model: 'local-generator',
       usage: null,
       estimatedCostUsd: 0,
+      formData: form,
     });
 
     return {
