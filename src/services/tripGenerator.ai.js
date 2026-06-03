@@ -9,7 +9,6 @@ import {
 
 import {
   generateLocalTrip,
-  generateLocalTripFromPrompt,
 } from '@/services/tripGenerator.local';
 
 const parseJsonSafely = (value) => {
@@ -92,41 +91,25 @@ const getDaysCountFromForm = (form = {}) => {
   return 3;
 };
 
-const generateFallbackTrip = ({ prompt, form }) => {
-  // Important : depuis le prompt V2, le texte du prompt n’est plus garanti
-  // compatible avec l’ancien parseur local. On privilégie donc formData,
-  // qui contient les vraies valeurs du formulaire.
-  if (form?.destination) {
-    const params = { ...form };
-
-    return generateLocalTrip({
-      destination: params.destination || 'Paris',
-      daysCount: getDaysCountFromForm(params),
-      budget: params.budget || 'modere',
-      travelers: params.travelers || 2,
-      style: params.travel_style || params.style || 'essentiels',
-      interests: params.interests || [],
-      arrivalCity: params.arrival_city || params.arrivalCity,
-      returnCity: params.return_city || params.returnCity,
-      walkingLevel: params.walking_level || params.walkingLevel || 'moyen',
-      arrivalTime: params.arrival_time || params.arrivalTime,
-      departureTime: params.departure_time || params.departureTime,
-      avoidItems: params.avoid_items || params.avoidItems,
-    });
-  }
-
-  if (prompt) {
-    return generateLocalTripFromPrompt(prompt);
-  }
+const generateFallbackTrip = ({ form }) => {
+  // Important : le fallback ne parse plus le prompt texte.
+  // Il utilise formData en priorité pour éviter qu’un Danemark ou une Italie
+  // retombe sur Paris si l’IA échoue.
+  const params = form ? { ...form } : {};
 
   return generateLocalTrip({
-    destination: 'Paris',
-    daysCount: 3,
-    budget: 'modere',
-    travelers: 2,
-    style: 'essentiels',
-    interests: [],
-    walkingLevel: 'moyen',
+    destination: params.destination || 'Paris',
+    daysCount: getDaysCountFromForm(params),
+    budget: params.budget || 'modere',
+    travelers: params.travelers || 2,
+    style: params.travel_style || params.style || 'essentiels',
+    interests: params.interests || [],
+    arrivalCity: params.arrival_city || params.arrivalCity,
+    returnCity: params.return_city || params.returnCity,
+    walkingLevel: params.walking_level || params.walkingLevel || 'moyen',
+    arrivalTime: params.arrival_time || params.arrivalTime,
+    departureTime: params.departure_time || params.departureTime,
+    avoidItems: params.avoid_items || params.avoidItems,
   });
 };
 
